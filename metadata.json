@@ -1,0 +1,8 @@
+{
+  "name": "TellMe",
+  "description": "A voice-first accessibility tool that reads and explains documents for people who cannot read.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TellMe</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Custom Animations for the "Thinking Cloud" */
+      @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-20px); }
+        100% { transform: translateY(0px); }
+      }
+      .animate-float {
+        animation: float 3s ease-in-out infinite;
+      }
+      .pulsate-glow {
+        animation: glow 2s infinite;
+      }
+      @keyframes glow {
+        0% { box-shadow: 0 0 5px rgba(255, 255, 255, 0.5); }
+        50% { box-shadow: 0 0 20px rgba(255, 255, 255, 0.8), 0 0 10px rgba(59, 130, 246, 0.5); }
+        100% { box-shadow: 0 0 5px rgba(255, 255, 255, 0.5); }
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.32.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0"
+  }
+}
+</script>
+</head>
+  <body class="bg-slate-50 text-slate-900 select-none overflow-hidden fixed inset-0">
+    <div id="root" class="h-full w-full"></div>
+  </body>
+</html>
