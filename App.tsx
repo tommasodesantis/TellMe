@@ -13,7 +13,15 @@ import {
   Check,
   Volume2,
   Loader2,
-  Hourglass
+  Hourglass,
+  Plus,
+  Smartphone,
+  FileText,
+  User,
+  Scan,
+  Hand,
+  Ban,
+  Layers
 } from 'lucide-react';
 import { AppState, DocumentAnalysis, Language } from './types';
 import * as Gemini from './services/geminiService';
@@ -30,19 +38,29 @@ const LANGUAGES: { code: Language, flagCode: string }[] = [
 ];
 
 const HELP_TEXTS: Record<Language, string> = {
-  'English': "Welcome. To analyze a paper, press the big blue Camera button to take a photo. Or, press the stack of pictures below to pick a file you already have. I will then explain it to you.",
-  'Spanish': "Hola. Para leer un documento, usa el botón grande de la Cámara para tomar una foto. O usa el botón de fotos abajo para elegir una que ya tengas. Luego te lo explicaré.",
-  'French': "Bonjour. Pour lire un document, appuyez sur le gros bouton Caméra pour prendre une photo. Ou choisissez une image existante avec le bouton photos. Je vous expliquerai ensuite.",
-  'Hindi': "Namaste. Kagaz padhne ke liye, bade Camera button se photo lein. Ya photos wale button se purani photo chunein. Phir main aapko samjhaunga.",
-  'Arabic': "مرحباً. لقراءة مستند، اضغط على زر الكاميرا الكبير لالتقاط صورة. أو اختر صورة موجودة من زر الصور. وسأشرحها لك."
+  'English': "Welcome. Press the Camera button. Make sure the whole page is inside the box. You can take multiple photos. Press the Checkmark when done. Or, upload files using the picture button.",
+  'Spanish': "Bienvenido. Presiona la Cámara. Asegúrate que la página esté en el cuadro. Puedes tomar varias fotos. Presiona la marca de verificación al terminar. O sube archivos con el botón de imagen.",
+  'French': "Bienvenue. Appuyez sur la Caméra. Cadrez bien la page dans la boîte. Vous pouvez prendre plusieurs photos. Validez avec le bouton vert. Ou téléchargez des fichiers.",
+  'Hindi': "Swagat hai. Camera button dabayein. Dhyan rahe poora kagaz box mein ho. Aap kai photo le sakte hain. Ho jane par tick dabayein. Ya file upload karein.",
+  'Arabic': "أهلاً بك. اضغط على الكاميرا. تأكد من أن الصفحة داخل الإطار. يمكنك التقاط عدة صور. اضغط على علامة الصح عند الانتهاء. أو حمل ملفات."
 };
+
+const MAX_PAGES = 5;
+
+interface Page {
+  base64: string;
+  mimeType: string;
+}
 
 const App: React.FC = () => {
   // State
   const [appState, setAppState] = useState<AppState>(AppState.LANDING);
   const [language, setLanguage] = useState<Language>('English');
-  const [docBase64, setDocBase64] = useState<string | null>(null);
-  const [mimeType, setMimeType] = useState<string>('image/jpeg');
+  
+  // Multi-page state
+  const [capturedPages, setCapturedPages] = useState<Page[]>([]);
+  const [limitAlert, setLimitAlert] = useState<'count' | 'pdf' | null>(null);
+  
   const [analysis, setAnalysis] = useState<DocumentAnalysis | null>(null);
   const [comicUrl, setComicUrl] = useState<string | null>(null);
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
@@ -51,6 +69,9 @@ const App: React.FC = () => {
   const [liveError, setLiveError] = useState<string | null>(null);
   const [isHelpPlaying, setIsHelpPlaying] = useState(false);
   
+  // Device detection state
+  const [isMobile, setIsMobile] = useState(false);
+
   // Audio Visualizer State
   const [userVolume, setUserVolume] = useState(0);
   const [aiVolume, setAiVolume] = useState(0);
@@ -65,10 +86,15 @@ const App: React.FC = () => {
   // Audio Source Ref (To handle stop/start)
   const currentAudioSource = useRef<AudioBufferSourceNode | null>(null);
 
-  // Initialize AudioContext on user interaction
+  // Initialize AudioContext on user interaction & Check Device Type
   useEffect(() => {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     setAudioContext(ctx);
+    
+    // Simple mobile detection regex
+    const checkMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    setIsMobile(checkMobile);
+
     return () => {
       ctx.close();
       if (liveClientRef.current) {
@@ -81,7 +107,16 @@ const App: React.FC = () => {
   useEffect(() => {
     let stream: MediaStream | null = null;
     if (showWebcam && videoRef.current) {
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      // For mobile, try to use the rear camera ('environment'). For desktop, 'user' is default but 'environment' falls back gracefully usually.
+      const constraints = { 
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 } 
+        } 
+      };
+
+      navigator.mediaDevices.getUserMedia(constraints)
         .then(s => {
           stream = s;
           if (videoRef.current) {
@@ -91,7 +126,16 @@ const App: React.FC = () => {
         })
         .catch(err => {
           console.error("Error accessing webcam:", err);
-          setShowWebcam(false);
+          // Fallback to any camera if environment fails
+          navigator.mediaDevices.getUserMedia({ video: true })
+            .then(s => {
+                stream = s;
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    videoRef.current.play();
+                }
+            })
+            .catch(e => setShowWebcam(false));
         });
     }
     return () => {
@@ -101,7 +145,18 @@ const App: React.FC = () => {
     };
   }, [showWebcam]);
 
-  const captureWebcam = () => {
+  const triggerLimitAlert = (type: 'count' | 'pdf') => {
+    setLimitAlert(type);
+    setTimeout(() => setLimitAlert(null), 2500);
+  };
+
+  const capturePage = () => {
+    // If limit reached, show visual alert instead of capturing
+    if (capturedPages.length >= MAX_PAGES) {
+        triggerLimitAlert('count');
+        return;
+    }
+
     if (videoRef.current) {
       const canvas = document.createElement('canvas');
       canvas.width = videoRef.current.videoWidth;
@@ -111,12 +166,27 @@ const App: React.FC = () => {
         ctx.drawImage(videoRef.current, 0, 0);
         const base64 = canvas.toDataURL('image/jpeg');
         const base64Data = base64.split(',')[1];
-        setDocBase64(base64Data);
-        setMimeType('image/jpeg');
-        setShowWebcam(false);
-        processDocument(base64Data, 'image/jpeg');
+        
+        // Add to pages list
+        setCapturedPages(prev => [...prev, { base64: base64Data, mimeType: 'image/jpeg' }]);
       }
     }
+  };
+
+  const finishCapture = () => {
+    if (capturedPages.length > 0) {
+      setShowWebcam(false);
+      processDocument(capturedPages);
+    }
+  };
+
+  const cancelWebcam = () => {
+      setShowWebcam(false);
+      setCapturedPages([]);
+  };
+
+  const removePage = (index: number) => {
+    setCapturedPages(prev => prev.filter((_, i) => i !== index));
   };
 
   // Handlers
@@ -134,23 +204,59 @@ const App: React.FC = () => {
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileList = Array.from(files);
+    const hasPdf = fileList.some(f => f.type === 'application/pdf');
+
+    if (hasPdf) {
+        if (fileList.length > 1) {
+            triggerLimitAlert('pdf');
+            return;
+        }
+        // If PDF, we replace current pages because PDF is usually a complete document
+    } else {
+        // If Images, we append, but check total limit
+        if (capturedPages.length + fileList.length > MAX_PAGES) {
+            triggerLimitAlert('count');
+            return;
+        }
+    }
 
     await handleApiKeySelection();
 
-    const type = file.type;
-    setMimeType(type);
     setAppState(AppState.CAPTURING);
     
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const base64 = reader.result as string;
-      const base64Data = base64.split(',')[1];
-      setDocBase64(base64Data);
-      processDocument(base64Data, type);
-    };
-    reader.readAsDataURL(file);
+    const newPages: Page[] = [];
+    const readers: Promise<void>[] = [];
+
+    fileList.forEach((file: File) => {
+        const reader = new FileReader();
+        const p = new Promise<void>(resolve => {
+            reader.onloadend = () => {
+                const base64 = reader.result as string;
+                const base64Data = base64.split(',')[1];
+                newPages.push({ base64: base64Data, mimeType: file.type });
+                resolve();
+            };
+        });
+        reader.readAsDataURL(file);
+        readers.push(p);
+    });
+
+    await Promise.all(readers);
+    
+    // Logic: If PDF, it replaces. If images, it appends.
+    let finalPages: Page[] = [];
+    if (hasPdf) {
+        finalPages = newPages;
+    } else {
+        finalPages = [...capturedPages, ...newPages];
+    }
+
+    setCapturedPages(finalPages);
+    processDocument(finalPages);
   };
 
   // Centralized Audio Player with Stop capability
@@ -199,7 +305,7 @@ const App: React.FC = () => {
     }
   };
 
-  const processDocument = async (base64: string, mime: string) => {
+  const processDocument = async (pages: Page[]) => {
     try {
       setIsApiError(false);
       
@@ -211,13 +317,15 @@ const App: React.FC = () => {
 
       // 1. Analyze
       setAppState(AppState.ANALYZING);
-      const result = await Gemini.analyzeDocument(base64, mime, language);
+      const result = await Gemini.analyzeDocument(pages, language);
       setAnalysis(result);
 
       // 2. Generate Assets (Parallel)
       setAppState(AppState.GENERATING_ART);
       
-      const fallbackImage = `data:${mime};base64,${base64}`;
+      const firstPageMime = pages[0].mimeType;
+      const firstPageBase64 = pages[0].base64;
+      const fallbackImage = `data:${firstPageMime};base64,${firstPageBase64}`;
 
       // Start Audio generation (Critical)
       const audioPromise = Gemini.generateNarration(result.narrative);
@@ -268,7 +376,7 @@ const App: React.FC = () => {
   };
 
   const toggleLiveSession = async () => {
-    if (!docBase64 || appState !== AppState.READY) return;
+    if (capturedPages.length === 0 || appState !== AppState.READY) return;
     setLiveError(null);
 
     // Stop narrative audio if entering live mode
@@ -308,17 +416,17 @@ const App: React.FC = () => {
 
         liveClientRef.current = client;
         
-        // Pass mimeType and analysis context. 
+        // Context: Use first page for visual anchor, but full text summary for intelligence
         const context = analysis ? `
           Topic: ${analysis.topic}
           Action Required: ${analysis.action}
           Narrative Explanation: ${analysis.narrative}
           
-          --- DETAILED DOCUMENT CONTEXT ---
+          --- DETAILED MULTI-PAGE DOCUMENT CONTEXT ---
           ${analysis.detailedSummary}
         ` : undefined;
 
-        await client.connect(docBase64, mimeType, language, context);
+        await client.connect(capturedPages[0].base64, capturedPages[0].mimeType, language, context);
         
       } catch (e: any) {
         console.error("Failed to start live session", e);
@@ -348,7 +456,7 @@ const App: React.FC = () => {
     setUserVolume(0);
     setAiVolume(0);
     setAppState(AppState.LANDING);
-    setDocBase64(null);
+    setCapturedPages([]); // Clear pages
     setAnalysis(null);
     setComicUrl(null);
     setIsApiError(false);
@@ -358,31 +466,164 @@ const App: React.FC = () => {
 
   // --- RENDER HELPERS ---
 
+  const renderLimitAlert = () => {
+    if (!limitAlert) return null;
+    
+    return (
+      <div 
+        className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+        onClick={() => setLimitAlert(null)}
+      >
+        <div className="bg-white rounded-3xl p-8 shadow-2xl flex flex-col items-center gap-4 animate-bounce-short">
+           {limitAlert === 'count' ? (
+              // Visual: Stack of Cards with Red Ban
+              <div className="relative w-40 h-40">
+                 {/* CSS Stack */}
+                 <div className="absolute top-4 left-4 w-32 h-32 bg-white rounded-xl shadow-md border-2 border-slate-300 transform -rotate-6"></div>
+                 <div className="absolute top-2 left-2 w-32 h-32 bg-white rounded-xl shadow-md border-2 border-slate-300 transform -rotate-3"></div>
+                 <div className="absolute top-0 left-0 w-32 h-32 bg-white rounded-xl shadow-lg border-2 border-slate-300 flex items-center justify-center">
+                    <span className="text-5xl font-bold text-slate-300">5</span>
+                 </div>
+                 <Ban className="absolute inset-0 w-full h-full text-red-500/90 drop-shadow-md" strokeWidth={2} />
+              </div>
+           ) : (
+              // Visual: PDF File with Red Ban
+               <div className="relative w-40 h-40 flex items-center justify-center">
+                 <FileText className="w-32 h-32 text-slate-300" strokeWidth={1} />
+                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-bold text-3xl text-slate-300">PDF</div>
+                 <Ban className="absolute inset-0 w-full h-full text-red-500/90 drop-shadow-md" strokeWidth={2} />
+              </div>
+           )}
+        </div>
+      </div>
+    );
+  };
+
   const renderLanding = () => {
     if (showWebcam) {
       return (
         <div className="flex flex-col h-full bg-black relative">
           <video 
             ref={videoRef} 
-            className="w-full h-full object-cover" 
+            className="w-full h-full object-cover opacity-80" 
             autoPlay 
             playsInline 
             muted
           />
+          
+          {renderLimitAlert()}
+          
+          {/* Visual Framing Animation - Adaptive to Device */}
+          <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
+             {isMobile ? (
+                // MOBILE: "Phone scanning document" Animation
+                <div className="relative w-64 h-64 opacity-60">
+                    {/* The Document on the 'table' */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 mt-12">
+                         <FileText className="w-24 h-24 text-white/50" strokeWidth={1} />
+                    </div>
+                    {/* The Phone scanning above it */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 mb-8 animate-float">
+                        <Smartphone className="w-32 h-32 text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]" strokeWidth={1.5} />
+                        {/* Scanning beam */}
+                        <div className="absolute top-[20%] left-[15%] right-[15%] h-0.5 bg-blue-400 shadow-[0_0_10px_#60A5FA] animate-pulse"></div>
+                    </div>
+                </div>
+             ) : (
+                // DESKTOP: "Hands holding document" Animation
+                <div className="relative w-full h-full flex items-center justify-center opacity-80">
+                     <div className="relative animate-float">
+                        {/* The Document Wireframe */}
+                        <div className="relative w-80 h-[28rem] border-4 border-white/30 rounded-[2.5rem] flex flex-col items-center justify-center backdrop-blur-[2px] shadow-2xl">
+                             
+                             {/* Central Reticle */}
+                             <div className="opacity-60 mb-16">
+                                <Scan className="w-24 h-24 text-white" strokeWidth={1.5} />
+                             </div>
+
+                             {/* Text Lines Hint */}
+                             <div className="absolute bottom-32 w-48 flex flex-col gap-4 opacity-40">
+                                <div className="h-3 bg-white rounded-full w-full shadow-sm"></div>
+                                <div className="h-3 bg-white rounded-full w-full shadow-sm"></div>
+                                <div className="h-3 bg-white rounded-full w-2/3 mx-auto shadow-sm"></div>
+                             </div>
+                        </div>
+
+                        {/* Hands holding the frame */}
+                        {/* Left Hand */}
+                        <div className="absolute -left-10 bottom-24 transform -rotate-12">
+                            <Hand className="w-36 h-36 text-white drop-shadow-xl" strokeWidth={1.5} />
+                        </div>
+
+                        {/* Right Hand */}
+                        <div className="absolute -right-10 bottom-24 transform rotate-12 scale-x-[-1]">
+                            <Hand className="w-36 h-36 text-white drop-shadow-xl" strokeWidth={1.5} />
+                        </div>
+                     </div>
+                </div>
+             )}
+          </div>
+
+          {/* Captured Thumbnails Strip */}
+          {capturedPages.length > 0 && (
+             <div className="absolute bottom-32 left-0 right-0 h-24 flex items-center gap-2 px-4 overflow-x-auto no-scrollbar z-40 bg-gradient-to-t from-black/80 to-transparent">
+                {capturedPages.map((page, idx) => (
+                    <div key={idx} className="relative w-16 h-20 flex-shrink-0 rounded-lg overflow-hidden border-2 border-white shadow-lg">
+                        <img src={`data:${page.mimeType};base64,${page.base64}`} className="w-full h-full object-cover" />
+                        <div className="absolute bottom-0 right-0 bg-blue-500 text-white text-[10px] px-1.5 font-bold">
+                            {idx + 1}
+                        </div>
+                        {/* Retake/Delete Button */}
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                removePage(idx);
+                            }}
+                            className="absolute top-0 right-0 w-6 h-6 bg-red-500 text-white flex items-center justify-center rounded-bl-lg hover:bg-red-600 transition-colors z-20"
+                            aria-label="Remove photo"
+                        >
+                            <X className="w-3 h-3" strokeWidth={3} />
+                        </button>
+                    </div>
+                ))}
+             </div>
+          )}
+
+          {/* Controls */}
           <div className="absolute bottom-8 left-0 right-0 flex justify-center items-center gap-8 z-50">
              <button 
-               onClick={() => setShowWebcam(false)}
+               onClick={cancelWebcam}
                className="p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/40 transition-colors"
              >
                <X className="w-8 h-8" />
              </button>
-             <button 
-               onClick={captureWebcam}
-               className="p-1 rounded-full border-4 border-white transition-transform active:scale-95"
-             >
-                <div className="w-16 h-16 bg-white rounded-full"></div>
-             </button>
-             <div className="w-16"></div> {/* Spacer for balance */}
+             
+             <div className="flex flex-col items-center">
+                <button 
+                onClick={capturePage}
+                className={`p-1 rounded-full border-4 border-white transition-transform active:scale-95`}
+                >
+                    <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center">
+                        {/* Plus icon inside camera button to suggest 'Add Page' */}
+                        {capturedPages.length > 0 && <Plus className="w-8 h-8 text-black/50" />}
+                    </div>
+                </button>
+                <span className="text-white text-xs font-bold mt-2 drop-shadow-md bg-black/50 px-2 py-0.5 rounded-full">
+                    {capturedPages.length} / {MAX_PAGES}
+                </span>
+             </div>
+
+             {/* Done Button - Only shows if pages captured */}
+             {capturedPages.length > 0 ? (
+                 <button 
+                   onClick={finishCapture}
+                   className="p-4 bg-green-500 rounded-full text-white shadow-lg animate-bounce hover:bg-green-600 transition-colors"
+                 >
+                   <Check className="w-8 h-8" strokeWidth={3} />
+                 </button>
+             ) : (
+                 <div className="w-16"></div> /* Spacer */
+             )}
           </div>
         </div>
       );
@@ -391,6 +632,8 @@ const App: React.FC = () => {
     return (
       <div className="flex flex-col items-center h-full bg-slate-50 relative overflow-hidden">
         
+        {renderLimitAlert()}
+
         {/* Top Section: Language Selection & Help */}
         <div className="w-full pt-8 pb-4 bg-white/80 backdrop-blur-md shadow-sm z-10 flex justify-between items-center px-4">
              {/* Language List */}
@@ -448,7 +691,10 @@ const App: React.FC = () => {
                 
                 <button 
                     onClick={() => {
-                        handleApiKeySelection().then(() => setShowWebcam(true));
+                        handleApiKeySelection().then(() => {
+                            setCapturedPages([]);
+                            setShowWebcam(true);
+                        });
                     }}
                     className="relative w-64 h-64 rounded-full bg-gradient-to-br from-indigo-500 to-indigo-700 shadow-[0_20px_50px_rgba(79,70,229,0.4)] flex items-center justify-center border-8 border-white active:scale-95 transition-transform"
                     aria-label="Start Camera"
@@ -466,6 +712,7 @@ const App: React.FC = () => {
           <div className="relative group w-32 h-32">
              <input 
               type="file" 
+              multiple
               accept="image/*,application/pdf" 
               onChange={handleFileUpload}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50"

@@ -11,7 +11,7 @@ const getClient = () => {
 };
 
 // 1. Analyze Document (The "Director")
-export const analyzeDocument = async (base64Data: string, mimeType: string, language: string): Promise<DocumentAnalysis> => {
+export const analyzeDocument = async (pages: {base64: string, mimeType: string}[], language: string): Promise<DocumentAnalysis> => {
   const ai = getClient();
   
   const schema: Schema = {
@@ -36,12 +36,17 @@ export const analyzeDocument = async (base64Data: string, mimeType: string, lang
     required: ["actor", "topic", "action", "isUrgent", "narrative", "detailedSummary", "prompts"]
   };
 
+  // Create parts for all pages
+  const imageParts = pages.map(p => ({
+    inlineData: { mimeType: p.mimeType, data: p.base64 }
+  }));
+
   const response = await ai.models.generateContent({
     model: "gemini-3-pro-preview",
     contents: {
       parts: [
-        { inlineData: { mimeType: mimeType, data: base64Data } },
-        { text: `Analyze this document. 1) Create a simplified explanation for a user with low literacy. 2) Create a highly detailed summary for an AI assistant's context. 3) Design visual prompts.` }
+        ...imageParts,
+        { text: `Analyze this document (which may consist of multiple pages). 1) Create a simplified explanation for a user with low literacy. 2) Create a highly detailed summary for an AI assistant's context (combining info from all pages). 3) Design visual prompts.` }
       ]
     },
     config: {
