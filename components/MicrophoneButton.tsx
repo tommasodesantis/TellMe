@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mic } from 'lucide-react';
+import { Ear } from 'lucide-react';
 
 interface Props {
   onClick: () => void;
@@ -55,7 +55,8 @@ const MicrophoneButton: React.FC<Props> = ({ onClick, isListening, userVolume = 
                 <span className="absolute w-full h-full rounded-full bg-red-400 opacity-75 animate-ping"></span>
             )}
             
-            <Mic className={`w-10 h-10 text-white ${isListening && !isUserSpeaking && !isAiSpeaking ? 'opacity-90' : ''}`} />
+            {/* The Ear Icon: Represents "I am listening to you" */}
+            <Ear className={`w-10 h-10 text-white ${isListening && !isUserSpeaking && !isAiSpeaking ? 'opacity-90' : ''}`} />
         </button>
     </div>
   );
