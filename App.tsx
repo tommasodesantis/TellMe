@@ -207,7 +207,7 @@ const App: React.FC = () => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
-    const fileList = Array.from(files);
+    const fileList: File[] = Array.from(files);
     const hasPdf = fileList.some(f => f.type === 'application/pdf');
 
     if (hasPdf) {
